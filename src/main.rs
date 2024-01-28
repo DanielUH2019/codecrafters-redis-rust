@@ -1,6 +1,6 @@
 // Uncomment this block to pass the first stage
 use redis_starter_rust::thread_pool::ThreadPool;
-use redis_starter_rust::resp::{build_response, handle_command};
+use redis_starter_rust::resp::{build_response, handle_command, Database};
 use std::io::prelude::*;
 use std::net::{TcpListener, TcpStream};
 
@@ -18,7 +18,8 @@ fn main() {
         pool.execute({
             move || match stream {
                 Ok(mut _stream) => {
-                    handle_command(&_stream);
+                    let mut db = Database::new();
+                    handle_command(&_stream, &mut db);
                 }
                 Err(e) => {
                     println!("error: {}", e);

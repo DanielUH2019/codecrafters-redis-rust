@@ -1,4 +1,5 @@
 
+use std::collections::HashMap;
 use std::io::prelude::*;
 use std::net::TcpStream;
 
@@ -8,14 +9,32 @@ use std::net::TcpStream;
 //     RedisArray(usize),
 //     Data()
 // }
+pub struct Database {
+    db: HashMap<String, String>,
+}
 
-pub fn handle_command(mut stream: &TcpStream) {
+impl Database {
+    pub fn new() -> Database {
+        Database { db: HashMap::new() }    
+    }
+
+    fn get(&self, key: &str) -> Option<&String> {
+        self.db.get(key)
+    }
+
+    fn set(&mut self, key: &str, value: &str) -> Option<String> {
+        self.db.insert(key.to_owned(), value.to_owned())
+    }
+}
+
+
+pub fn handle_command(mut stream: &TcpStream, db: &mut Database) {
     // let mut buffer = [0; 512];
     let mut request = String::new();
+
     loop {
         let mut buffer = vec![0;512];
         let mut is_data_in_buffer = false;
-
         // Read the request into the buffer
         // println!("end loop");
         match stream.read(&mut buffer) {
@@ -24,8 +43,8 @@ pub fn handle_command(mut stream: &TcpStream) {
                 if bytes_read == 0 {
                     if is_data_in_buffer {
                         let request_by_lines: Vec<String> = request.split_terminator("\r\n").map(|line| line.to_string()).collect();
-                        let response = build_response(request_by_lines);
-                        stream.write_all(&response).unwrap();
+                        let response = build_response(request_by_lines, db);
+                        stream.write_all(response[response.len() - 1].as_slice()).unwrap();
                         continue;
                     }
                     stream.flush().unwrap();
@@ -37,13 +56,14 @@ pub fn handle_command(mut stream: &TcpStream) {
                 if bytes_read < 512 {
                     if is_data_in_buffer {
                         let request_by_lines: Vec<String> = request.split_terminator("\r\n").map(|line| line.to_string()).collect();
-                        let response = build_response(request_by_lines);
-                        stream.write_all(&response).unwrap();
+                        let response = build_response(request_by_lines, db);
+                        stream.write_all(response[response.len() - 1].as_slice()).unwrap();
                         continue;
                     }
+                    stream.flush().unwrap();
                     break;
                 }
-                // println!("Request: {}", request);
+                
             }
             Err(e) => {
                 println!("Error: {}", e);
@@ -52,26 +72,47 @@ pub fn handle_command(mut stream: &TcpStream) {
             }
             
         }
-        // println!("end loop");
+        
     };
 }
-pub fn build_response(lines: Vec<String>) -> Vec<u8> {
-    // let array_size = parse_array_size(&lines[0]);
-    // assert_eq!(array_size, lines.len());
-    let command = parse_command(&lines[2]).unwrap();
-    println!("Command: {}", command);
-    if command == "ping" {
-        return b"+PONG\r\n".to_vec();
+pub fn build_response(lines: Vec<String>, db: &mut Database) -> Vec<Vec<u8>> {
+    let array_size = parse_array_size(&lines[0]);
+    let mut command_index: usize = 2;
+    let mut response: Vec<Vec<u8>> = Vec::new();
+    let mut i: usize = 0;
+    loop {
+        if command_index >= lines.len() {
+            break;
+        }
+        let command = parse_command(&lines[command_index]).unwrap();
+        println!("lines: {:?} and command: {} ", lines, command);
+        if command == "ping" {
+            response.push(b"+PONG\r\n".to_vec());
+            command_index += 3;
+        } else if command == "echo" {
+            let data = &lines[4];
+            let data_size = data.chars().count();
+            response.push(format!("${}\r\n{}\r\n", data_size, data).as_bytes().to_vec());
+            command_index += 5;
+        } else if command == "set" {
+            let key = &lines[4];
+            let value = &lines[6];
+            db.set(key, value);
+            response.push(b"+OK\r\n".to_vec());
+            command_index += 7;
+        } else if command == "get" {
+            let key = &lines[4];
+            let value = db.get(key);
+            response.push(format!("+{}\r\n", value.unwrap()).as_bytes().to_vec());
+            command_index += 5;
+        } else {
+            panic!("Not implemented command")
+        }
+        i += 1;
     }
-    if command == "echo" {
-        let data = &lines[4];
-        let data_size = data.chars().count();
-        // let data = data.as_bytes().to_vec();
-        // $N\r\n<message>\r\n
-        return format!("${}\r\n{}\r\n", data_size, data).as_bytes().to_vec();
-    } else {
-        panic!("Not implemented command")
-    }
+
+    response
+    
 }
 pub fn parse_array_size(line: &str) -> usize {
     let mut l = line.chars();
@@ -83,6 +124,8 @@ pub fn parse_command(line: &str) -> Option<String>{
     match line{
         "ping" => Some("ping".to_string()),
         "echo" => Some("echo".to_string()),
+        "set" => Some("set".to_string()),
+        "get" => Some("get".to_string()),
         _ => None,
     }
 }
